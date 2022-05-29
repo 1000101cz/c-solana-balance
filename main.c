@@ -1,3 +1,16 @@
+/* C Solana Balance
+ *    - get actual solana wallet balance from solana cluster
+ *
+ * usage
+ *    - './SolBalance /path/file_with_pubkey'
+ *
+ * requirements
+ *    - json-c
+ *    - curl c dev lib
+ *
+ */
+
+
 #include <stdio.h>
 #include <stdbool.h>
 #include <unistd.h>
@@ -6,16 +19,11 @@
 #include <json-c/json_tokener.h>
 #include <json-c/json_object.h>
 #include <ctype.h>
-//#include <curl/curl.h> // replace system() command with c lib functions
+#include <curl/curl.h>
 
 #define MAIN 0
 #define DEV 1
 #define TEST 2
-
-
-/*
- * ARGV 1 - file with wallet public key
- */
 
 
 // check if any application is installed and in PATH
@@ -45,8 +53,75 @@ _Bool can_run_command(const char *cmd) {
     return 0;
 }
 
+// get response to balance request from Solana cluster
+void curl_balance_request(char *cluster_address, char *json_request) {
+    FILE *balance_json = fopen("/tmp/solBalance.json","wb");
+
+    CURLcode ret;
+    CURL *hnd;
+    struct curl_slist *slist1;
+
+    slist1 = NULL;
+    slist1 = curl_slist_append(slist1, "Content-Type: application/json");
+
+    hnd = curl_easy_init();
+    curl_easy_setopt(hnd, CURLOPT_BUFFERSIZE, 102400L);
+    curl_easy_setopt(hnd, CURLOPT_URL, cluster_address);
+    curl_easy_setopt(hnd, CURLOPT_NOPROGRESS, 1L);
+    curl_easy_setopt(hnd, CURLOPT_POSTFIELDS, json_request);
+    curl_easy_setopt(hnd, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)107);
+    curl_easy_setopt(hnd, CURLOPT_HTTPHEADER, slist1);
+    curl_easy_setopt(hnd, CURLOPT_MAXREDIRS, 50L);
+    curl_easy_setopt(hnd, CURLOPT_HTTP_VERSION, (long)CURL_HTTP_VERSION_2TLS);
+    curl_easy_setopt(hnd, CURLOPT_CUSTOMREQUEST, "POST");
+    curl_easy_setopt(hnd, CURLOPT_FTP_SKIP_PASV_IP, 1L);
+    curl_easy_setopt(hnd, CURLOPT_TCP_KEEPALIVE, 1L);
+    curl_easy_setopt(hnd, CURLOPT_WRITEDATA, balance_json);
+
+    ret = curl_easy_perform(hnd);
+
+    curl_easy_cleanup(hnd);
+    hnd = NULL;
+    curl_slist_free_all(slist1);
+    slist1 = NULL;
+
+    fclose(balance_json);
+}
+
+long get_balance(char *pubkey_string, char *cluster_address) {
+    char jsonBalanceRequestBuffer[200]; // string containing json file
+    sprintf(jsonBalanceRequestBuffer,"{\"jsonrpc\":\"2.0\", \"id\":1, \"method\":\"getBalance\", \"params\":[\"%s\"]}",pubkey_string);
+    curl_balance_request(cluster_address,jsonBalanceRequestBuffer);
+
+    // transform required json file to buffer
+    char buffer[1024] = {'\0'};
+    FILE *jsonBalance = fopen("/tmp/solBalance.json","r");
+    fread(buffer, 1024, 1, jsonBalance);
+    fclose(jsonBalance);
+    system("rm /tmp/solBalance.json");
+
+    // read balance data from buffer
+    json_object *parsed_json = json_tokener_parse(buffer);
+    sprintf(buffer,"%s",json_object_get_string(json_object_object_get(parsed_json, "result")));
+    parsed_json = json_tokener_parse(buffer);
+    char *ptr;
+
+    return strtol(json_object_get_string(json_object_object_get(parsed_json, "value")),&ptr,10);
+}
+
+// convert lamports to SOL
+double lam_to_sol(long valueLamports) {
+    return (double)valueLamports/1000000000.0;
+}
+
+// convert SOL to lamports
+long sol_to_lam(double valueSol) {
+    return (long)(valueSol*1000000000.0);
+}
+
 int main(int argc, char *argv[]) {
-    // check if solana is installed
+
+    // check if solana is installed (not necessary yet)
     if (can_run_command("solana")) {
         system("solana --version");
     } else {
@@ -74,6 +149,7 @@ int main(int argc, char *argv[]) {
     }
     printf("public key: %s\n",pubkey_string);
 
+    // select Solana cluster
     int cluster = MAIN;
     char *cluster_address;
     switch (cluster) {
@@ -95,31 +171,9 @@ int main(int argc, char *argv[]) {
     }
 
     // get actual wallet balance from cluster
-    char jsonBalanceRequestBuffer[200]; // string containing json file
-    sprintf(jsonBalanceRequestBuffer,"{\"jsonrpc\":\"2.0\", \"id\":1, \"method\":\"getBalance\", \"params\":[\"%s\"]}",pubkey_string);
-    FILE *jsonBalanceRequest = fopen("balanceRequest.json","w"); // json request file
-    fprintf(jsonBalanceRequest,"%s",jsonBalanceRequestBuffer);
-    fclose(jsonBalanceRequest);
-
-    char get_balance_cmd[300] = {'\0'}; // curl request sent command
-    sprintf(get_balance_cmd,"curl %s -X POST -H \"Content-Type: application/json\" -d \'%s\' > /tmp/solBalance.json",cluster_address,jsonBalanceRequestBuffer);
-
-    char buffer[1024] = {'\0'};
-
-    system(get_balance_cmd);
-    FILE *jsonBalance = fopen("/tmp/solBalance.json","r");
-    fread(buffer, 1024, 1, jsonBalance);
-    fclose(jsonBalance);
-    system("rm /tmp/solBalance.json");
-
-    // read balance from required json file
-    json_object *parsed_json = json_tokener_parse(buffer);
-    sprintf(buffer,"%s",json_object_get_string(json_object_object_get(parsed_json, "result")));
-    parsed_json = json_tokener_parse(buffer);
-    char *ptr;
-    long value = strtol(json_object_get_string(json_object_object_get(parsed_json, "value")),&ptr,10);
-    double valueSol = (double)value/1000000000.0;
-    printf("balance: %ld lamports   ( = %.5f SOL)\n",value,valueSol);
+    long valueLamports = get_balance(pubkey_string, cluster_address);
+    double valueSol = lam_to_sol(valueLamports);
+    printf("\nWallet Balance:  %ld lamports   ( = %.5f SOL)\n",valueLamports,valueSol);
 
     return 0;
 }
