@@ -25,34 +25,6 @@
 #define DEV 1
 #define TEST 2
 
-
-// check if any application is installed and in PATH
-_Bool can_run_command(const char *cmd) {
-    if(strchr(cmd, '/')) {
-        return access(cmd, X_OK)==0;
-    }
-    const char *path = getenv("PATH");
-    if(!path) return false;
-    char *buf = malloc(strlen(path)+strlen(cmd)+3);
-    if(!buf) return 0;
-    for(; *path; ++path) {
-        char *p = buf;
-        for(; *path && *path!=':'; ++path,++p) {
-            *p = *path;
-        }
-        if(p==buf) *p++='.';
-        if(p[-1]!='/') *p++='/';
-        strcpy(p, cmd);
-        if(access(buf, X_OK)==0) {
-            free(buf);
-            return 1;
-        }
-        if(!*path) break;
-    }
-    free(buf);
-    return 0;
-}
-
 // get response to balance request from Solana cluster
 void curl_balance_request(char *cluster_address, char *json_request) {
     FILE *balance_json = fopen("/tmp/solBalance.json","wb");
@@ -120,13 +92,6 @@ long sol_to_lam(double valueSol) {
 }
 
 int main(int argc, char *argv[]) {
-
-    // check if solana is installed (not necessary yet)
-    if (can_run_command("solana")) {
-        system("solana --version");
-    } else {
-        printf("solana not installed or not found");
-    }
 
     // select solana wallet
     char *pubkey_file;
